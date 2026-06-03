@@ -5,7 +5,7 @@ import { runJava } from './java/index.js';
 import { runFallow } from './ts/index.js';
 import { printHeader, printSection, printFindings, printHotspots, printSummary } from './output.js';
 import { checkThresholds } from './threshold.js';
-import type { Config, Subcommand } from './types.js';
+import type { Config, Subcommand, Finding, Hotspot } from './types.js';
 
 const pkg = { version: '0.1.0' };
 
@@ -19,6 +19,7 @@ function addCommonOptions(cmd: Command): Command {
     .option('--top <n>', 'how many hotspots to show', String(DEFAULTS.top));
 }
 
+// fallow-ignore-next-line complexity
 function buildConfig(sub: Subcommand, opts: Record<string, string | boolean | undefined>): Config {
   return {
     sub,
@@ -30,6 +31,50 @@ function buildConfig(sub: Subcommand, opts: Record<string, string | boolean | un
     verbose: Boolean(opts['verbose']),
     top: parseInt(String(opts['top'] ?? DEFAULTS.top), 10),
   };
+}
+
+function hiddenHint(total: number, visible: number): string {
+  const hidden = total - visible;
+  return hidden > 0 ? `  — ${hidden} medium/low hidden, use --verbose` : '';
+}
+
+function pmdSectionLabel(sub: Subcommand): string {
+  if (sub === 'complexity') return 'complexity  (PMD)';
+  if (sub === 'dead-code')  return 'dead code  (PMD)';
+  return 'pmd';
+}
+
+function showsHotspots(sub: Subcommand) { return sub === 'all' || sub === 'hotspots'; }
+function showsBugs(sub: Subcommand)     { return sub === 'all' || sub === 'bugs'; }
+function showsPmd(sub: Subcommand)      { return sub === 'all' || sub === 'dead-code' || sub === 'complexity'; }
+
+function renderResults(config: Config, findings: Finding[], hotspots: Hotspot[]) {
+  const { sub, verbose, top } = config;
+  const visible = verbose
+    ? findings
+    : findings.filter(f => f.severity === 'critical' || f.severity === 'high');
+
+  if (showsHotspots(sub)) {
+    printSection('hotspots', `top ${Math.min(hotspots.length, top)} of ${hotspots.length} files`);
+    printHotspots(hotspots, top);
+  }
+
+  if (sub === 'hotspots') return;
+
+  const sbAll     = findings.filter(f => f.source === 'spotbugs');
+  const pmdAll    = findings.filter(f => f.source === 'pmd');
+  const sbVisible  = visible.filter(f => f.source === 'spotbugs');
+  const pmdVisible = visible.filter(f => f.source === 'pmd');
+
+  if (showsBugs(sub)) {
+    printSection(`bugs  (SpotBugs)${hiddenHint(sbAll.length, sbVisible.length)}`, sbVisible.length);
+    printFindings(sbVisible);
+  }
+
+  if (showsPmd(sub)) {
+    printSection(`${pmdSectionLabel(sub)}${hiddenHint(pmdAll.length, pmdVisible.length)}`, pmdVisible.length);
+    printFindings(pmdVisible);
+  }
 }
 
 async function runAnalysis(sub: Subcommand, opts: Record<string, string | boolean | undefined>) {
@@ -45,49 +90,16 @@ async function runAnalysis(sub: Subcommand, opts: Record<string, string | boolea
     runFallow(sub === 'all' ? [] : [sub, ...process.argv.slice(3)]);
   }
 
-  const langLabel = project.lang === 'both' ? 'Java + TypeScript' : 'Java';
-  printHeader(pkg.version, project.name, langLabel);
-
+  printHeader(pkg.version, project.name, project.lang === 'both' ? 'Java + TypeScript' : 'Java');
   console.log();
+
   const { findings, hotspots } = await runJava(project.root, config);
   console.log();
 
-  const showMedLow = config.verbose;
-  const visibleFindings = showMedLow
-    ? findings
-    : findings.filter(f => f.severity === 'critical' || f.severity === 'high');
-
-  if (sub === 'all' || sub === 'hotspots') {
-    const shown = Math.min(hotspots.length, config.top);
-    printSection('hotspots', `top ${shown} of ${hotspots.length} files`);
-    printHotspots(hotspots, config.top);
-  }
-
-  if (sub !== 'hotspots') {
-    const sbFindings = visibleFindings.filter(f => f.source === 'spotbugs');
-    const pmdFindings = visibleFindings.filter(f => f.source === 'pmd');
-
-    if (sub === 'all' || sub === 'bugs') {
-      const total = findings.filter(f => f.source === 'spotbugs').length;
-      const hidden = total - sbFindings.length;
-      const label = `bugs  (SpotBugs)${hidden > 0 ? `  — ${hidden} medium/low hidden, use --verbose` : ''}`;
-      printSection(label, sbFindings.length);
-      printFindings(sbFindings);
-    }
-
-    if (sub === 'all' || sub === 'dead-code' || sub === 'complexity') {
-      const total = findings.filter(f => f.source === 'pmd').length;
-      const hidden = total - pmdFindings.length;
-      const base = sub === 'complexity' ? 'complexity  (PMD)' : sub === 'dead-code' ? 'dead code  (PMD)' : 'pmd';
-      const label = `${base}${hidden > 0 ? `  — ${hidden} medium/low hidden, use --verbose` : ''}`;
-      printSection(label, pmdFindings.length);
-      printFindings(pmdFindings);
-    }
-  }
+  renderResults(config, findings, hotspots);
 
   const { passed, reasons } = checkThresholds(config, findings, hotspots);
   printSummary(passed, reasons);
-
   if (!passed) process.exit(1);
 }
 

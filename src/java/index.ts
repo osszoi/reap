@@ -3,11 +3,32 @@ import { isMavenAvailable, compile } from './maven.js';
 import { runPmd } from './pmd.js';
 import { runSpotbugs } from './spotbugs.js';
 import { analyzeHotspots } from './hotspots.js';
-import type { Finding, Hotspot, Config } from '../types.js';
+import type { Finding, Hotspot, Config, Subcommand } from '../types.js';
 
 export interface JavaResult {
   findings: Finding[];
   hotspots: Hotspot[];
+}
+
+function getRunFlags(sub: Subcommand, noCompile: boolean) {
+  return {
+    compile:  (sub === 'all' || sub === 'bugs') && !noCompile,
+    pmd:      sub !== 'hotspots',
+    spotbugs: sub === 'all' || sub === 'bugs',
+    hotspots: sub === 'all' || sub === 'hotspots',
+  };
+}
+
+function runStep<T>(label: string, fn: () => T, successFn?: (r: T) => string): T {
+  const s = ora({ text: label, prefixText: ' ' }).start();
+  try {
+    const r = fn();
+    s.succeed(successFn ? successFn(r) : label);
+    return r;
+  } catch (e) {
+    s.fail(`${label} failed`);
+    throw e;
+  }
 }
 
 export async function runJava(cwd: string, config: Config): Promise<JavaResult> {
@@ -16,56 +37,21 @@ export async function runJava(cwd: string, config: Config): Promise<JavaResult> 
     process.exit(2);
   }
 
-  const needsCompile = (config.sub === 'all' || config.sub === 'bugs') && !config.noCompile;
-  const needsPmd     = config.sub !== 'hotspots';
-  const needsSb      = config.sub === 'all' || config.sub === 'bugs';
-  const needsHots    = config.sub === 'all' || config.sub === 'hotspots';
-
-  let findings: Finding[] = [];
+  const flags = getRunFlags(config.sub, config.noCompile);
+  const findings: Finding[] = [];
   let hotspots: Hotspot[] = [];
 
-  if (needsCompile) {
-    const spinner = ora({ text: 'compiling…', prefixText: ' ' }).start();
-    try {
-      compile(cwd);
-      spinner.succeed('compiled');
-    } catch (e) {
-      spinner.fail('compile failed');
-      throw e;
-    }
-  }
+  if (flags.compile)  runStep('compiling…',       () => compile(cwd),               () => 'compiled');
+  if (flags.pmd)      findings.push(...runStep('running PMD…',      () => runPmd(cwd, config.sub),  r => `PMD — ${r.length} violations`));
+  if (flags.spotbugs) findings.push(...runStep('running SpotBugs…', () => runSpotbugs(cwd),         r => `SpotBugs — ${r.length} findings`));
 
-  if (needsPmd) {
-    const spinner = ora({ text: 'running PMD…', prefixText: ' ' }).start();
-    try {
-      const pmdFindings = runPmd(cwd, config.sub);
-      findings.push(...pmdFindings);
-      spinner.succeed(`PMD — ${pmdFindings.length} violations`);
-    } catch (e) {
-      spinner.fail('PMD failed');
-      throw e;
-    }
-  }
-
-  if (needsSb) {
-    const spinner = ora({ text: 'running SpotBugs…', prefixText: ' ' }).start();
-    try {
-      const sbFindings = runSpotbugs(cwd);
-      findings.push(...sbFindings);
-      spinner.succeed(`SpotBugs — ${sbFindings.length} findings`);
-    } catch (e) {
-      spinner.fail('SpotBugs failed');
-      throw e;
-    }
-  }
-
-  if (needsHots) {
-    const spinner = ora({ text: 'analyzing git history…', prefixText: ' ' }).start();
+  if (flags.hotspots) {
+    const s = ora({ text: 'analyzing git history…', prefixText: ' ' }).start();
     try {
       hotspots = analyzeHotspots(cwd);
-      spinner.succeed(`git hotspots — ${hotspots.length} files ranked`);
-    } catch (e) {
-      spinner.warn('git hotspot analysis skipped (not a git repo?)');
+      s.succeed(`git hotspots — ${hotspots.length} files ranked`);
+    } catch {
+      s.warn('git hotspot analysis skipped (not a git repo?)');
     }
   }
 
