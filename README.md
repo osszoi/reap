@@ -25,13 +25,13 @@
 ## Install
 
 ```sh
-npx reap
+npx @edjl/reap
 ```
 
 Or globally:
 
 ```sh
-npm install -g reap
+npm install -g @edjl/reap
 ```
 
 ---
