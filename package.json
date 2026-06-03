@@ -2,11 +2,20 @@
   "name": "reap",
   "version": "0.1.0",
   "description": "Code health scanner for Java and TypeScript — git hotspots, bugs, dead code, complexity",
-  "bin": { "reap": "./dist/cli.js" },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "reap": "./dist/cli.js"
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "release": "GITHUB_TOKEN=$(gh auth token) release-it",
+    "release:patch": "GITHUB_TOKEN=$(gh auth token) release-it patch",
+    "release:minor": "GITHUB_TOKEN=$(gh auth token) release-it minor",
+    "release:major": "GITHUB_TOKEN=$(gh auth token) release-it major"
   },
   "dependencies": {
     "chalk": "^4.1.2",
@@ -16,12 +25,17 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "release-it": "^20.2.0",
     "tsup": "^8.3.0",
     "typescript": "^5.5.4"
   },
   "tsup": {
-    "entry": ["src/cli.ts"],
-    "format": ["cjs"],
+    "entry": [
+      "src/cli.ts"
+    ],
+    "format": [
+      "cjs"
+    ],
     "target": "node18",
     "shims": true,
     "clean": true,
