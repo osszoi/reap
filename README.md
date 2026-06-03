@@ -1,16 +1,26 @@
 # reap
 
-Code health scanner for Java and TypeScript. Combines static analysis (PMD, SpotBugs) with git churn history to surface what actually matters — not just what the linter complains about.
+`reap` is a thin wrapper around [fallow](https://github.com/fallow-rs/fallow) that extends its analysis to Java projects. If your team runs both Java and TypeScript codebases and wants a single tool across all pipelines, `reap` gives you a consistent interface: same commands, same exit codes, same mental model.
 
-Named after its companion tool [fallow](https://github.com/fallow-rs/fallow). For TypeScript projects, `reap` delegates directly to `fallow`. For Java, it runs its own analysis stack.
+**For TypeScript projects, `reap` does nothing on its own — it calls `fallow` directly and gets out of the way.** If you only work with TypeScript, just use `fallow`. `reap` is for teams that also ship Java and don't want to maintain two different analysis setups.
+
+---
+
+## How it works
+
+- **TypeScript projects** — `reap` detects `package.json` / `tsconfig.json` and delegates the call to `fallow` with all arguments forwarded as-is. `fallow` must be installed globally.
+- **Java projects** — `reap` detects `pom.xml` and runs its own analysis stack: PMD for static analysis, SpotBugs for bug patterns and security, and a port of fallow's git churn algorithm for hotspot detection.
+- **Mixed projects** — runs both.
 
 ---
 
 ## Requirements
 
 - Node.js 18+
-- Java projects: Maven (`mvn`) in PATH
-- TypeScript projects: `fallow` installed globally
+- `fallow` installed globally (`npm install -g fallow`) — required for TypeScript analysis
+- Maven (`mvn`) in PATH — required for Java analysis
+
+---
 
 ## Install
 
@@ -36,7 +46,7 @@ reap dead-code         # unused variables, imports, private methods
 reap complexity        # cyclomatic and cognitive complexity
 ```
 
-For TypeScript projects, any subcommand and its arguments are forwarded to `fallow` as-is.
+For TypeScript projects, subcommands and arguments are forwarded to `fallow` verbatim.
 
 ---
 
@@ -96,7 +106,13 @@ To enforce strict quality gates:
 
 Hotspot score = recency-weighted commit frequency × file size factor. Commits are decayed with a 90-day half-life, so files that churned last month rank higher than files that churned years ago and stabilized. A large file that keeps changing is more dangerous than a small one.
 
-This is the same approach used by [fallow](https://github.com/fallow-rs/fallow) and originally described in Adam Tornhill's *Your Code as a Crime Scene*.
+This is a direct port of fallow's algorithm, originally described in Adam Tornhill's *Your Code as a Crime Scene*.
+
+---
+
+## Acknowledgements
+
+`reap` wouldn't exist without [fallow](https://github.com/fallow-rs/fallow). The hotspot algorithm, the CLI design, and the overall philosophy are all fallow's — this project just brings the same ideas to the Java ecosystem and wraps them under a common interface. If you work with TypeScript, go use fallow directly; it's significantly more capable there.
 
 ---
 
