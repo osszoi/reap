@@ -1,6 +1,6 @@
 {
   "name": "@edjl/reap",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Code health scanner for Java and TypeScript — git hotspots, bugs, dead code, complexity",
   "files": [
     "dist"
