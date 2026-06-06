@@ -4,6 +4,10 @@
 
 # reap
 
+[![CI](https://github.com/osszoi/reap/actions/workflows/ci.yml/badge.svg)](https://github.com/osszoi/reap/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/osszoi/reap)](https://github.com/osszoi/reap/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/osszoi/reap)](LICENSE)
+
 `reap` is a fast, single-binary code health scanner for **Java** projects, built in Rust. One parse pass feeds a module graph that powers every section — hotspots, complexity, cycles, dead code, duplication, dependencies — so you get a complete picture of a codebase in seconds.
 
 ---
@@ -28,29 +32,30 @@ A single parse pass (tree-sitter) feeds a module graph, which feeds every sectio
 
 ## Install
 
-Download a prebuilt binary from the [latest release](https://github.com/edjl/reap/releases/latest):
+**Homebrew** (macOS / Linux):
 
 ```sh
-# Linux x86_64
-curl -L https://github.com/edjl/reap/releases/latest/download/reap-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv reap /usr/local/bin/
-
-# Linux ARM64
-curl -L https://github.com/edjl/reap/releases/latest/download/reap-aarch64-unknown-linux-gnu.tar.gz | tar xz
-
-# macOS (Apple Silicon)
-curl -L https://github.com/edjl/reap/releases/latest/download/reap-aarch64-apple-darwin.tar.gz | tar xz
-
-# macOS (Intel)
-curl -L https://github.com/edjl/reap/releases/latest/download/reap-x86_64-apple-darwin.tar.gz | tar xz
+brew install osszoi/tap/reap
 ```
 
-Windows: download `reap-x86_64-pc-windows-msvc.zip` from the releases page and put `reap.exe` on your `PATH`.
-
-Or build from source:
+**Shell installer** (macOS / Linux):
 
 ```sh
-git clone https://github.com/edjl/reap
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/osszoi/reap/releases/latest/download/reap-installer.sh | sh
+```
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://github.com/osszoi/reap/releases/latest/download/reap-installer.ps1 | iex
+```
+
+**Manual:** download the archive for your platform from the [latest release](https://github.com/osszoi/reap/releases/latest), extract it, and put `reap` on your `PATH`.
+
+**From source:**
+
+```sh
+git clone https://github.com/osszoi/reap
 cd reap
 cargo build --release
 # binary at target/release/reap

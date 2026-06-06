@@ -4,12 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://github.com/osszoi/reap"
 publish = false
 description = "Code health scanner for Java — git hotspots, complexity, duplicates, dead code, dependencies"
 
 [[bin]]
 name = "reap"
 path = "src/main.rs"
+
+# distribute via dist even though publish = false keeps it off crates.io
+[package.metadata.dist]
+dist = true
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
