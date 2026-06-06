@@ -28,6 +28,8 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
+# Extra files to bundle into every release archive
+include = ["NOTICE"]
 
 # The profile that 'dist' will build with
 [profile.dist]

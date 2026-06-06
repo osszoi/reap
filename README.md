@@ -202,6 +202,8 @@ This is a direct port of fallow's algorithm, originally described in Adam Tornhi
 
 `reap`'s analysis algorithms — hotspot scoring, complexity metrics, duplicate detection, and the overall CLI design — are ported from [fallow](https://github.com/fallow-rs/fallow), which does the same for TypeScript. This project brings those ideas to the Java ecosystem.
 
+fallow is MIT-licensed, Copyright (c) 2026 Bart Waardenburg ([LICENSE](https://github.com/fallow-rs/fallow/blob/main/LICENSE)). Its copyright notice is reproduced in [`NOTICE`](NOTICE) as required.
+
 ---
 
 ## License
