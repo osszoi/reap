@@ -1,12 +1,12 @@
-<p align="center">
-  <img src="images/reap-banner.jpeg" alt="reap" width="100%">
-</p>
-
-# reap
-
 [![CI](https://github.com/osszoi/reap/actions/workflows/ci.yml/badge.svg)](https://github.com/osszoi/reap/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/osszoi/reap)](https://github.com/osszoi/reap/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/osszoi/reap)](LICENSE)
+
+# reap
+
+<p align="center">
+  <img src="images/reap-banner.jpeg" alt="reap" width="100%">
+</p>
 
 `reap` is a fast, single-binary code health scanner for **Java** projects, built in Rust. One parse pass feeds a module graph that powers every section — hotspots, complexity, cycles, dead code, duplication, dependencies — so you get a complete picture of a codebase in seconds.
 
