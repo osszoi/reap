@@ -81,6 +81,7 @@ pub struct CloneFamily {
     pub group_count: usize,
     pub total_lines: u32,
     pub suggestion: String,
+    pub members: Vec<CloneGroup>,
 }
 
 #[derive(Debug, Clone)]

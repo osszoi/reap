@@ -131,12 +131,30 @@ pub fn print_clone_families(families: &[CloneFamily], top: usize) {
         return;
     }
     for f in families.iter().take(top) {
+        let scope = if f.files.len() == 1 {
+            "within 1 file".to_string()
+        } else {
+            format!("across {} files", f.files.len())
+        };
         println!(
-            "  {} groups, {} lines across {}",
+            "  {} blocks, {} lines duplicated {}",
             f.group_count.to_string().bold(),
             f.total_lines.to_string().bold(),
-            f.files.join(", ")
+            scope
         );
+        for (idx, g) in f.members.iter().enumerate() {
+            let locs: Vec<String> = g
+                .instances
+                .iter()
+                .map(|i| format!("{}:{}-{}", i.file, i.start_line, i.end_line))
+                .collect();
+            println!(
+                "    {} {} lines  {}",
+                format!("#{}", idx + 1).dimmed(),
+                g.line_count,
+                locs.join("  ≡  ").dimmed()
+            );
+        }
         println!("    {} {}", "→".yellow(), f.suggestion);
     }
     println!();

@@ -14,7 +14,12 @@ struct FileTokens {
     path: String,
     keys: Vec<String>,
     lines: Vec<u32>,
+    weights: Vec<f32>,
 }
+
+// decorators/annotations count for less than real code: similar @GetMapping etc.
+// across files isn't duplication worth acting on
+const ANNOTATION_WEIGHT: f32 = 0.5;
 
 pub struct DuplicationReport {
     pub groups: Vec<CloneGroup>,
@@ -29,9 +34,10 @@ pub fn analyze(root: &Path, cwd: &Path, min_tokens: usize, min_lines: u32) -> Du
             let tree = parse(&source)?;
             let mut keys = Vec::new();
             let mut lines = Vec::new();
-            tokenize(tree.root_node(), source.as_bytes(), &mut keys, &mut lines);
+            let mut weights = Vec::new();
+            tokenize(tree.root_node(), source.as_bytes(), &mut keys, &mut lines, &mut weights, 1.0);
             let rel = p.strip_prefix(cwd).unwrap_or(p).to_string_lossy().into_owned();
-            Some(FileTokens { path: rel, keys, lines })
+            Some(FileTokens { path: rel, keys, lines, weights })
         })
         .filter(|f| !f.keys.is_empty())
         .collect();
@@ -43,16 +49,34 @@ pub fn analyze(root: &Path, cwd: &Path, min_tokens: usize, min_lines: u32) -> Du
 
 // --- tokenization ---
 
-fn tokenize(node: Node, src: &[u8], keys: &mut Vec<String>, lines: &mut Vec<u32>) {
+fn tokenize(
+    node: Node,
+    src: &[u8],
+    keys: &mut Vec<String>,
+    lines: &mut Vec<u32>,
+    weights: &mut Vec<f32>,
+    weight: f32,
+) {
     let kind = node.kind();
     if kind == "line_comment" || kind == "block_comment" {
         return;
     }
+    // imports and package decls are near-identical across files in a module — never duplication
+    if kind == "import_declaration" || kind == "package_declaration" {
+        return;
+    }
+    // discount everything under an annotation so decorators contribute half
+    let weight = if kind == "annotation" || kind == "marker_annotation" {
+        ANNOTATION_WEIGHT
+    } else {
+        weight
+    };
     let line = node.start_position().row as u32 + 1;
     if kind.ends_with("literal") {
         let text = node.utf8_text(src).unwrap_or("");
         keys.push(format!("{kind}:{text}"));
         lines.push(line);
+        weights.push(weight);
         return;
     }
     if node.child_count() == 0 {
@@ -62,11 +86,12 @@ fn tokenize(node: Node, src: &[u8], keys: &mut Vec<String>, lines: &mut Vec<u32>
             keys.push(kind.to_string());
         }
         lines.push(line);
+        weights.push(weight);
         return;
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        tokenize(child, src, keys, lines);
+        tokenize(child, src, keys, lines, weights, weight);
     }
 }
 
@@ -117,7 +142,7 @@ fn detect(files: &[FileTokens], min_tokens: usize, min_lines: u32) -> Vec<CloneG
             }
             let positions: Vec<usize> = (start..j).map(|x| sa[x]).collect();
             if let Some(group) =
-                build_group(&positions, min_len, files, &owner, &offset, min_lines)
+                build_group(&positions, min_len, files, &owner, &offset, min_tokens, min_lines)
             {
                 groups.push(group);
             }
@@ -138,6 +163,7 @@ fn build_group(
     files: &[FileTokens],
     owner: &[usize],
     offset: &[usize],
+    min_tokens: usize,
     min_lines: u32,
 ) -> Option<CloneGroup> {
     let mut spans: Vec<(usize, usize)> = positions
@@ -146,6 +172,17 @@ fn build_group(
         .map(|&p| (owner[p], offset[p]))
         .collect();
     spans.sort_unstable();
+
+    // weighted gate: a block that's mostly decorators/imports-residue shouldn't count.
+    // tokens are identical across instances, so any one span is representative.
+    if let Some(&(fid, off)) = spans.first() {
+        let f = &files[fid];
+        let end = (off + length).min(f.weights.len());
+        let weighted: f32 = f.weights[off..end].iter().sum();
+        if weighted < min_tokens as f32 {
+            return None;
+        }
+    }
 
     let mut instances: Vec<CloneInstance> = Vec::new();
     let mut last: Option<(usize, usize)> = None;
@@ -220,6 +257,7 @@ fn group_families(groups: &[CloneGroup]) -> Vec<CloneFamily> {
                 group_count: gs.len(),
                 total_lines,
                 suggestion,
+                members: gs.iter().map(|g| (*g).clone()).collect(),
             }
         })
         .collect();
@@ -292,8 +330,9 @@ mod tests {
         let tree = parse(source).unwrap();
         let mut keys = Vec::new();
         let mut lines = Vec::new();
-        tokenize(tree.root_node(), source.as_bytes(), &mut keys, &mut lines);
-        FileTokens { path: "X.java".into(), keys, lines }
+        let mut weights = Vec::new();
+        tokenize(tree.root_node(), source.as_bytes(), &mut keys, &mut lines, &mut weights, 1.0);
+        FileTokens { path: "X.java".into(), keys, lines, weights }
     }
 
     #[test]
@@ -314,8 +353,8 @@ class %NAME% {
         let b = toks(&block.replace("%NAME%", "B"));
         // ~50+ tokens of shared body; use a modest threshold
         let files = vec![
-            FileTokens { path: "A.java".into(), keys: a.keys, lines: a.lines },
-            FileTokens { path: "B.java".into(), keys: b.keys, lines: b.lines },
+            FileTokens { path: "A.java".into(), keys: a.keys, lines: a.lines, weights: a.weights },
+            FileTokens { path: "B.java".into(), keys: b.keys, lines: b.lines, weights: b.weights },
         ];
         let groups = detect(&files, 20, 3);
         assert!(!groups.is_empty(), "expected a clone group");

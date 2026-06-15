@@ -150,7 +150,7 @@ pub static TOPICS: &[Topic] = &[
         id: "clone-families",
         aliases: &["families", "clone-family", "clone-families"],
         name: "Clone Families",
-        legend: "clone groups spanning the same set of files — candidates to extract into shared code.",
+        legend: "multiple duplicate blocks recurring over the same set of files — each block lists its exact locations (a ≡ b means a and b are copies). candidates to extract into shared code.",
         full: "A clone family groups together duplicate blocks that recur across the same set of \
                files. Where a single duplicate group is one repeated block, a family reveals that \
                two or more files share multiple duplicated blocks — a strong signal they should \
