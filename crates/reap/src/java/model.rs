@@ -1,5 +1,6 @@
 use crate::java::extract::{functions_in, FunctionMetrics};
 use crate::java::parse::parse;
+use crate::java::suppress::{self, CycleIgnore};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tree_sitter::Node;
@@ -32,6 +33,7 @@ pub struct FileInfo {
     pub functions: Vec<FunctionMetrics>,
     pub line_count: u32,
     pub annotations: HashSet<String>,
+    pub cycle_ignore: CycleIgnore,
 }
 
 const TYPE_DECL_KINDS: &[&str] = &[
@@ -71,6 +73,7 @@ pub fn parse_file(path: PathBuf, source: &str) -> Option<FileInfo> {
         functions: functions_in(root, src),
         line_count: source.split('\n').count() as u32,
         annotations,
+        cycle_ignore: suppress::collect(root, src),
     })
 }
 

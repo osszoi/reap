@@ -1,4 +1,5 @@
 mod analyze;
+mod baseline;
 mod churn;
 mod config;
 mod detect;
@@ -15,6 +16,7 @@ use config::{
     parse_fail_on, Config, DEFAULT_MAX_COGNITIVE, DEFAULT_MAX_COMPLEXITY, DEFAULT_MIN_COMMITS,
     DEFAULT_TOP,
 };
+use baseline::Baseline;
 use detect::{detect_project, Lang};
 use java::graph::ModuleGraph;
 use owo_colors::OwoColorize;
@@ -22,7 +24,7 @@ use report_filter::{ChangedError, ReportFilter};
 use std::path::{Path, PathBuf};
 use types::{
     CircularDependency, CloneFamily, CloneGroup, ComplexityViolation, Finding, Hotspot,
-    LargeFunction, RefactoringTarget, Subcommand, UnusedExport, UnusedFile,
+    IgnoreNote, LargeFunction, RefactoringTarget, Subcommand, UnusedExport, UnusedFile,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -214,6 +216,8 @@ struct JavaResult {
     complexity: Vec<ComplexityViolation>,
     large: Vec<LargeFunction>,
     cycles: Vec<CircularDependency>,
+    cycle_ignored: usize,
+    ignore_notes: Vec<IgnoreNote>,
     unused_files: Vec<UnusedFile>,
     unused_exports: Vec<UnusedExport>,
     targets: Vec<RefactoringTarget>,
@@ -250,6 +254,7 @@ fn run_java(config: &Config, root: &Path, repo_root: &Path, filter: &ReportFilte
         None
     };
 
+    let baseline = graph.as_ref().and_then(|g| Baseline::load(repo_root, filter, g));
     let want_complexity = matches!(sub, Subcommand::All | Subcommand::Complexity);
     let want_circular = matches!(sub, Subcommand::All | Subcommand::Circular);
     let want_unused_files = matches!(sub, Subcommand::All | Subcommand::UnusedFiles);
@@ -275,9 +280,10 @@ fn run_java(config: &Config, root: &Path, repo_root: &Path, filter: &ReportFilte
     }
 
     // cycles + unused_exports are needed by refactoring targets even when their own sections aren't shown
-    let mut cycles = Vec::new();
+    let (mut cycles, mut ignored_edges, mut ignore_notes) = (Vec::new(), Vec::new(), Vec::new());
     if let (true, Some(graph)) = (want_circular || want_targets, &graph) {
-        cycles = analyze::circular::collect(graph, repo_root);
+        let report = analyze::circular::collect(graph, repo_root, baseline.as_ref());
+        (cycles, ignored_edges, ignore_notes) = (report.cycles, report.ignored_edges, report.notes);
     }
     let mut unused_exports = Vec::new();
     if let (true, Some(graph)) = (want_unused_exports || want_targets, &graph) {
@@ -320,22 +326,36 @@ fn run_java(config: &Config, root: &Path, repo_root: &Path, filter: &ReportFilte
         raw_hotspots.into_iter().filter(|h| !filter.skipped(&h.file)).collect()
     };
 
+    // PR mode: a function only counts if this branch pushed it over a threshold
+    let crossed = |path: &str, name: &str, line: u32, over: &dyn Fn(&java::extract::FunctionMetrics) -> u8| {
+        baseline.as_ref().is_none_or(|b| b.crossed(path, name, line, over))
+    };
     complexity.retain(|v| {
         let (s, e) = fn_span(v.line, v.line_count);
         filter.span_shown(&v.path, s, e)
+            && crossed(&v.path, &v.name, v.line, &|f| {
+                (f.cyclomatic > max_cyc) as u8 | ((f.cognitive > max_cog) as u8) << 1
+            })
     });
     large.retain(|f| {
         let (s, e) = fn_span(f.line, f.line_count);
         filter.span_shown(&f.path, s, e)
+            && crossed(&f.path, &f.name, f.line, &|m| {
+                (m.line_count > analyze::large_functions::LARGE_THRESHOLD) as u8
+            })
     });
     unused_exports.retain(|u| filter.span_shown(&u.path, u.line, u.line));
     unused_files.retain(|f| filter.added_shown(&f.path));
-    cycles.retain(|c| filter.multi_shown(&c.files));
+    cycles.retain(|c| filter.multi_shown(&c.files) && (baseline.is_none() || !c.new_edges.is_empty()));
+    ignored_edges.retain(|(file, line)| filter.span_shown(file, *line, *line));
+    ignore_notes.retain(|n| filter.span_shown(&n.file, n.line, n.line));
     targets.retain(|t| filter.file_shown(&t.path));
 
     // only keep cycles/exports if their sections are actually requested (targets borrowed them)
     if !want_circular {
         cycles.clear();
+        ignored_edges.clear();
+        ignore_notes.clear();
     }
     if !want_unused_exports {
         unused_exports.clear();
@@ -368,6 +388,8 @@ fn run_java(config: &Config, root: &Path, repo_root: &Path, filter: &ReportFilte
         complexity,
         large,
         cycles,
+        cycle_ignored: ignored_edges.len(),
+        ignore_notes,
         unused_files,
         unused_exports,
         targets,
@@ -417,7 +439,7 @@ fn render_results(config: &Config, filter: &ReportFilter, result: &JavaResult) {
     if matches!(sub, Subcommand::All | Subcommand::Circular) {
         report::print_section_count("circular dependencies", result.cycles.len());
         legend(config, "circular");
-        report::print_circular(&result.cycles, config.top);
+        report::print_circular(&result.cycles, result.cycle_ignored, &result.ignore_notes, config.top);
     }
 
     if matches!(sub, Subcommand::All | Subcommand::UnusedFiles) {

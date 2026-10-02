@@ -19,7 +19,7 @@ A single parse pass (tree-sitter) feeds a module graph, which feeds every sectio
 - **hotspots** — git churn × complexity density, recency-weighted (90-day half-life), with fan-in and a trend arrow.
 - **high complexity functions** — cyclomatic (McCabe) and cognitive (SonarSource) complexity.
 - **large functions** — functions over 60 lines.
-- **circular dependencies** — import cycles between classes (Tarjan SCC), flagged cross-package.
+- **circular dependencies** — import cycles between classes (Tarjan SCC), flagged cross-package; intentional ones can be [ignored in code](#ignoring-intentional-cycles).
 - **unused files** — files unreachable from any entry point (main / tests / Spring beans / SPI).
 - **unused exports** — public/protected methods with no caller elsewhere.
 - **duplicates & clone families** — token-level duplicate blocks (suffix array + LCP).
@@ -152,6 +152,31 @@ Entries are globs: a bare name like `generated` matches that folder anywhere in 
 
 ---
 
+## Ignoring intentional cycles
+
+Some cycles are on purpose, like a JPA bidirectional relationship (`@OneToMany(mappedBy)` + `@ManyToOne`). Silence them in code, eslint style:
+
+```java
+public class Transcript {
+    // reap-ignore-next-line circular -- JPA bidirectional, owned by Score
+    @OneToMany(mappedBy = "transcript") private List<Score> scores;
+}
+```
+
+```java
+// reap-ignore-file circular
+package com.acme.model;
+```
+
+- `reap-ignore-next-line circular` drops this file's dependency on **every project class named on the next line**: an import, or code like the field above. The whole dependency goes, even if that class is used elsewhere in the file. Put it right above the line that names the class, not above an annotation on its own line.
+- `reap-ignore-file circular` takes the file out of cycle detection. Cycles among the other files are still reported.
+- Both work as `//` or `/* */`, accept `circular-dependency` as an alias, and anything after `--` is a free-text reason. A bare marker with no rule means every rule.
+- Ignored dependencies only leave cycle detection: reachability, fan-in, unused files and hotspots still see them. A cycle that has another path is still reported.
+
+The circular section prints how many dependency edges were ignored, and flags with ⚠ any ignore that is stale (no cycle runs through it), matches nothing on its next line, or names an unknown rule. Under `--compare-against`, both are limited to comments on lines the branch changed, so a PR that adds an ignore shows it.
+
+---
+
 ## `--compare-against` — PR mode (introduced findings only)
 
 ```sh
@@ -159,6 +184,12 @@ reap --compare-against=master
 ```
 
 Analyzes the whole project (so cross-file links stay correct), then reports **only findings on the code this branch actually introduced** vs `<ref>`. This is **line-level** changed-hunk scoping: editing a file does *not* blame the pre-existing methods you didn't touch — only the lines your diff added or modified are in scope.
+
+Pre-existing debt is never blamed, even in code the branch touches:
+
+- **Complexity / large functions** — a function counts only when the branch pushes it over a threshold: it's new and over it, or it was under it at the merge-base and is over it now (per metric). A function that was already over isn't blamed, even if it gets worse.
+- **Circular dependencies** — a cycle counts only when the branch adds a dependency inside it or adds a file to it. Each added dependency is printed under the cycle (`new B.java → D.java`), so the fix is to remove that dependency or [ignore it](#ignoring-intentional-cycles), not to untangle the whole cycle.
+- A renamed or moved file or function has no match at the merge-base, so it counts as new.
 
 This makes it safe as a merge-blocking GitHub check: it fails the PR on issues the author introduced, never on legacy code they merely sat next to. Hotspots are omitted (churn ranking is meaningless for one PR); dependency findings show only if the PR edited a `pom.xml`. If `<ref>` doesn't exist or it isn't a git repo, `reap` prints a notice and falls back to the full report.
 

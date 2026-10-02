@@ -1,6 +1,6 @@
 use crate::types::{
     CircularDependency, CloneFamily, CloneGroup, ComplexityViolation, Exceeded, Finding, Hotspot,
-    LargeFunction, RefactoringTarget, Severity, Trend, UnusedExport, UnusedFile,
+    IgnoreNote, LargeFunction, RefactoringTarget, Severity, Trend, UnusedExport, UnusedFile,
 };
 use owo_colors::OwoColorize;
 use std::path::Path;
@@ -81,11 +81,9 @@ fn trend_label(t: Trend) -> String {
     }
 }
 
-pub fn print_circular(cycles: &[CircularDependency], top: usize) {
+pub fn print_circular(cycles: &[CircularDependency], ignored: usize, notes: &[IgnoreNote], top: usize) {
     if cycles.is_empty() {
         println!("{}", "    no circular dependencies".dimmed());
-        println!();
-        return;
     }
     for c in cycles.iter().take(top) {
         let tag = if c.cross_package {
@@ -101,6 +99,16 @@ pub fn print_circular(cycles: &[CircularDependency], top: usize) {
             .join(&format!(" {} ", "→".dimmed()));
         println!("  {} files{}", c.files.len(), tag);
         println!("    {chain}");
+        for (from, to) in &c.new_edges {
+            println!("      {} {} {} {}", "new".yellow(), basename(from), "→".dimmed(), basename(to));
+        }
+    }
+    if ignored > 0 {
+        let noun = if ignored == 1 { "dependency edge" } else { "dependency edges" };
+        println!("{}", format!("    {ignored} {noun} ignored via reap-ignore").dimmed());
+    }
+    for n in notes {
+        println!("  {} {}  {}", "⚠".yellow(), format!("{}:{}", n.file, n.line).white(), n.message.yellow());
     }
     println!();
 }

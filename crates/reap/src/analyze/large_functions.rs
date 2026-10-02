@@ -2,7 +2,7 @@ use crate::java::model::FileInfo;
 use crate::types::LargeFunction;
 use std::path::Path;
 
-const LARGE_THRESHOLD: u32 = 60;
+pub const LARGE_THRESHOLD: u32 = 60;
 
 pub fn collect(files: &[FileInfo], cwd: &Path) -> Vec<LargeFunction> {
     let mut entries: Vec<LargeFunction> = files

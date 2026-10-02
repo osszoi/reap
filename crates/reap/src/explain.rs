@@ -82,7 +82,13 @@ pub static TOPICS: &[Topic] = &[
         how_to_fix: "Break the cycle by introducing an interface one side depends on, moving the \
                      shared type to a third location, or inverting a dependency (dependency \
                      inversion). Cross-package cycles usually signal a misplaced class — move it to \
-                     the module that truly owns it.",
+                     the module that truly owns it.\n\
+                     \n\
+                     If a cycle is intentional (e.g. a JPA bidirectional relationship), silence it in \
+                     code: `// reap-ignore-next-line circular` drops this file's dependency on every \
+                     class named on the next line (import or code), and `// reap-ignore-file circular` \
+                     takes the whole file out of cycle detection. Add a reason after `--`. Stale or \
+                     misspelled ignores are flagged with ⚠ in this section.",
     },
     Topic {
         id: "unused-files",
@@ -221,7 +227,9 @@ fn print_topic(topic: &Topic) {
     println!("  {}", topic.legend.dimmed());
     println!();
     println!("  {}", "how to fix".bold());
-    println!("  {}", topic.how_to_fix);
+    for line in topic.how_to_fix.lines() {
+        println!("  {}", line.trim_start());
+    }
     println!();
 }
 

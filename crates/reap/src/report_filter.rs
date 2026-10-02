@@ -7,6 +7,7 @@ pub struct ChangedSet {
     ranges: HashMap<String, Vec<(u32, u32)>>,
     added_files: HashSet<String>,
     pom_changed: bool,
+    merge_base: String,
 }
 
 pub struct ReportFilter {
@@ -21,6 +22,18 @@ impl ReportFilter {
 
     pub fn compare_mode(&self) -> bool {
         self.changed.is_some()
+    }
+
+    pub fn merge_base(&self) -> Option<&str> {
+        self.changed.as_ref().map(|c| c.merge_base.as_str())
+    }
+
+    pub fn changed_paths(&self) -> Vec<&str> {
+        self.changed.as_ref().map(|c| c.ranges.keys().map(|k| k.as_str()).collect()).unwrap_or_default()
+    }
+
+    pub fn is_added(&self, path: &str) -> bool {
+        self.changed.as_ref().is_some_and(|c| c.added_files.contains(path))
     }
 
     pub fn skipped(&self, path: &str) -> bool {
@@ -177,17 +190,22 @@ pub fn build_changed(repo_root: &Path, reference: &str) -> Result<ChangedSet, Ch
         return Err(ChangedError::BadRef(format!("ref '{reference}' not found")));
     }
 
+    let Some(merge_base) = git_stdout(repo_root, &["merge-base", reference, "HEAD"]).map(|s| s.trim().to_string())
+    else {
+        return Err(ChangedError::BadRef(format!("cannot diff against '{reference}' (no merge-base?)")));
+    };
+
     let mut ranges: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
     let mut added: HashSet<String> = HashSet::new();
 
     let range = format!("{reference}...HEAD");
-    if let Some(out) = git_stdout(repo_root, &["diff", "--unified=0", "--no-color", &range]) {
+    if let Some(out) = git_stdout(repo_root, &["diff", "--unified=0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", &range]) {
         parse_diff(&out, &mut ranges, &mut added);
     } else {
         return Err(ChangedError::BadRef(format!("cannot diff against '{reference}' (no merge-base?)")));
     }
 
-    if let Some(out) = git_stdout(repo_root, &["diff", "--unified=0", "--no-color", "HEAD"]) {
+    if let Some(out) = git_stdout(repo_root, &["diff", "--unified=0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "HEAD"]) {
         parse_diff(&out, &mut ranges, &mut added);
     }
 
@@ -204,7 +222,7 @@ pub fn build_changed(repo_root: &Path, reference: &str) -> Result<ChangedSet, Ch
 
     let pom_changed = ranges.keys().chain(added.iter()).any(|p| p.ends_with("pom.xml"));
 
-    Ok(ChangedSet { ranges, added_files: added, pom_changed })
+    Ok(ChangedSet { ranges, added_files: added, pom_changed, merge_base })
 }
 
 fn git_ok(dir: &Path, args: &[&str]) -> bool {

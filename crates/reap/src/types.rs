@@ -47,6 +47,15 @@ pub struct Hotspot {
 pub struct CircularDependency {
     pub files: Vec<String>,
     pub cross_package: bool,
+    // PR mode: dependencies inside the cycle that the branch added (from, to)
+    pub new_edges: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IgnoreNote {
+    pub file: String,
+    pub line: u32,
+    pub message: String,
 }
 
 #[derive(Debug, Clone)]
