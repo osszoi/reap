@@ -189,7 +189,8 @@ Pre-existing debt is never blamed, even in code the branch touches:
 
 - **Complexity / large functions** — a function counts only when the branch pushes it over a threshold: it's new and over it, or it was under it at the merge-base and is over it now (per metric). A function that was already over isn't blamed, even if it gets worse.
 - **Circular dependencies** — a cycle counts only when the branch adds a dependency inside it or adds a file to it. Each added dependency is printed under the cycle (`new B.java → D.java`), so the fix is to remove that dependency or [ignore it](#ignoring-intentional-cycles), not to untangle the whole cycle.
-- A renamed or moved file or function has no match at the merge-base, so it counts as new.
+- **Duplicates / clone families** — a duplicate block counts only when its code now appears more times than it did at the merge-base (matched by content, so a moved or renamed copy isn't new). Editing a line inside an old copy isn't blamed; pasting a third copy of it is. Families are built only from the introduced blocks.
+- A renamed or moved file or function has no match at the merge-base, so it counts as new (duplicates excepted, see above).
 
 This makes it safe as a merge-blocking GitHub check: it fails the PR on issues the author introduced, never on legacy code they merely sat next to. Hotspots are omitted (churn ranking is meaningless for one PR); dependency findings show only if the PR edited a `pom.xml`. If `<ref>` doesn't exist or it isn't a git repo, `reap` prints a notice and falls back to the full report.
 

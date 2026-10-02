@@ -18,33 +18,47 @@ pub enum BaseFile<'a> {
 // "introduced" apart from "was already there"
 pub struct Baseline {
     base: HashMap<String, Option<FileInfo>>,
+    // merge-base text of every java file the branch modified or deleted
+    sources: HashMap<String, String>,
     head_functions: HashMap<String, Vec<FunctionMetrics>>,
 }
 
 impl Baseline {
-    pub fn load(repo_root: &Path, filter: &ReportFilter, graph: &ModuleGraph) -> Option<Self> {
+    pub fn load(repo_root: &Path, filter: &ReportFilter, graph: Option<&ModuleGraph>) -> Option<Self> {
         let merge_base = filter.merge_base()?;
-        let paths: Vec<&str> = filter.changed_paths().into_iter().filter(|p| p.ends_with(".java")).collect();
-        let base = paths
+        let mut paths: Vec<&str> = filter.changed_paths();
+        paths.extend(filter.base_paths());
+        paths.retain(|p| p.ends_with(".java"));
+        paths.sort_unstable();
+        paths.dedup();
+        let loaded: Vec<(String, Option<String>)> = paths
             .par_iter()
             .map(|&path| {
-                let info = if filter.is_added(path) {
-                    None
-                } else {
-                    git_show(repo_root, merge_base, path).and_then(|src| parse_file(repo_root.join(path), &src))
-                };
-                (path.to_string(), info)
+                let source = if filter.is_added(path) { None } else { git_show(repo_root, merge_base, path) };
+                (path.to_string(), source)
             })
             .collect();
+        let base = loaded
+            .par_iter()
+            .map(|(path, src)| (path.clone(), src.as_ref().and_then(|s| parse_file(repo_root.join(path), s))))
+            .collect();
+        let sources = loaded.into_iter().filter_map(|(path, src)| Some((path, src?))).collect();
         let head_functions = graph
-            .files
-            .iter()
-            .filter_map(|f| {
-                let rel = f.path.strip_prefix(repo_root).unwrap_or(&f.path).to_string_lossy().into_owned();
-                paths.contains(&rel.as_str()).then(|| (rel, f.functions.clone()))
+            .map(|g| {
+                g.files
+                    .iter()
+                    .filter_map(|f| {
+                        let rel = f.path.strip_prefix(repo_root).unwrap_or(&f.path).to_string_lossy().into_owned();
+                        paths.contains(&rel.as_str()).then(|| (rel, f.functions.clone()))
+                    })
+                    .collect()
             })
-            .collect();
-        Some(Baseline { base, head_functions })
+            .unwrap_or_default();
+        Some(Baseline { base, sources, head_functions })
+    }
+
+    pub fn sources(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.sources.iter().map(|(p, s)| (p.as_str(), s.as_str()))
     }
 
     pub fn file(&self, path: &str) -> BaseFile<'_> {
@@ -94,6 +108,7 @@ impl Baseline {
         let parse = |path: &str, src: &str| parse_file(Path::new("/r").join(path), src).unwrap();
         Baseline {
             base: base.iter().map(|(p, src)| (p.to_string(), src.map(|s| parse(p, s)))).collect(),
+            sources: base.iter().filter_map(|(p, src)| Some((p.to_string(), (*src)?.to_string()))).collect(),
             head_functions: head.iter().map(|(p, src)| (p.to_string(), parse(p, src).functions)).collect(),
         }
     }

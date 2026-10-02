@@ -1,3 +1,4 @@
+use crate::baseline::{BaseFile, Baseline};
 use crate::java::discover::java_files;
 use crate::java::parse::parse;
 use crate::types::{CloneFamily, CloneGroup, CloneInstance};
@@ -26,25 +27,101 @@ pub struct DuplicationReport {
     pub families: Vec<CloneFamily>,
 }
 
-pub fn analyze(root: &Path, cwd: &Path, min_tokens: usize, min_lines: u32) -> DuplicationReport {
+pub fn analyze(
+    root: &Path,
+    cwd: &Path,
+    min_tokens: usize,
+    min_lines: u32,
+    baseline: Option<&Baseline>,
+) -> DuplicationReport {
     let files: Vec<FileTokens> = java_files(root)
         .par_iter()
         .filter_map(|p| {
             let source = fs::read_to_string(p).ok()?;
-            let tree = parse(&source)?;
-            let mut keys = Vec::new();
-            let mut lines = Vec::new();
-            let mut weights = Vec::new();
-            tokenize(tree.root_node(), source.as_bytes(), &mut keys, &mut lines, &mut weights, 1.0);
             let rel = p.strip_prefix(cwd).unwrap_or(p).to_string_lossy().into_owned();
-            Some(FileTokens { path: rel, keys, lines, weights })
+            tokens_of(rel, &source)
         })
         .filter(|f| !f.keys.is_empty())
         .collect();
 
-    let groups = detect(&files, min_tokens, min_lines);
-    let families = group_families(&groups);
+    // merge-base versions of what the branch modified or deleted; unchanged files are the same on both sides
+    let base_files: Vec<FileTokens> = baseline
+        .map(|b| b.sources().collect::<Vec<_>>().par_iter().filter_map(|(p, s)| tokens_of(p.to_string(), s)).collect())
+        .unwrap_or_default();
+    let corpus = baseline.map(|b| {
+        let unchanged = files.iter().filter(|f| matches!(b.file(&f.path), BaseFile::Unchanged));
+        BaseCorpus::new(unchanged.chain(&base_files).map(|f| f.keys.as_slice()))
+    });
+
+    let groups = detect(&files, min_tokens, min_lines, corpus.as_ref());
+    // PR mode: a family is built only from the copies the branch introduced
+    let fresh: Vec<CloneGroup> = groups.iter().filter(|g| !g.existed_at_base).cloned().collect();
+    let families = group_families(&fresh);
     DuplicationReport { groups, families }
+}
+
+fn tokens_of(path: String, source: &str) -> Option<FileTokens> {
+    let tree = parse(source)?;
+    let mut keys = Vec::new();
+    let mut lines = Vec::new();
+    let mut weights = Vec::new();
+    tokenize(tree.root_node(), source.as_bytes(), &mut keys, &mut lines, &mut weights, 1.0);
+    Some(FileTokens { path, keys, lines, weights })
+}
+
+// token stream of the merge-base, to tell a copy that was already there from one the branch added
+struct BaseCorpus<'a> {
+    ids: HashMap<&'a str, u32>,
+    // 0 separates files
+    text: Vec<u32>,
+    at: HashMap<u32, Vec<usize>>,
+}
+
+impl<'a> BaseCorpus<'a> {
+    fn new(files: impl Iterator<Item = &'a [String]>) -> Self {
+        let mut ids: HashMap<&'a str, u32> = HashMap::new();
+        let mut text = Vec::new();
+        for keys in files {
+            for key in keys {
+                let next = ids.len() as u32 + 1;
+                text.push(*ids.entry(key.as_str()).or_insert(next));
+            }
+            text.push(0);
+        }
+        let mut at: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (i, &t) in text.iter().enumerate() {
+            if t != 0 {
+                at.entry(t).or_default().push(i);
+            }
+        }
+        BaseCorpus { ids, text, at }
+    }
+
+    // non-overlapping occurrences, same rule build_group uses for instances
+    fn count(&self, pattern: &[String]) -> usize {
+        let Some(ids) = pattern.iter().map(|k| self.ids.get(k.as_str()).copied()).collect::<Option<Vec<u32>>>() else {
+            return 0;
+        };
+        // anchor on the rarest token so common ones like `{` don't blow up the scan
+        let Some((anchor, positions)) =
+            ids.iter().enumerate().filter_map(|(i, id)| self.at.get(id).map(|v| (i, v))).min_by_key(|(_, v)| v.len())
+        else {
+            return 0;
+        };
+        let mut count = 0;
+        let mut next_free = 0;
+        for &p in positions {
+            if p < anchor || p - anchor < next_free {
+                continue;
+            }
+            let start = p - anchor;
+            if self.text.get(start..start + ids.len()) == Some(ids.as_slice()) {
+                count += 1;
+                next_free = start + ids.len();
+            }
+        }
+        count
+    }
 }
 
 // --- tokenization ---
@@ -97,7 +174,7 @@ fn tokenize(
 
 // --- detection via generalized suffix array + LCP ---
 
-fn detect(files: &[FileTokens], min_tokens: usize, min_lines: u32) -> Vec<CloneGroup> {
+fn detect(files: &[FileTokens], min_tokens: usize, min_lines: u32, base: Option<&BaseCorpus>) -> Vec<CloneGroup> {
     if files.is_empty() {
         return Vec::new();
     }
@@ -142,7 +219,7 @@ fn detect(files: &[FileTokens], min_tokens: usize, min_lines: u32) -> Vec<CloneG
             }
             let positions: Vec<usize> = (start..j).map(|x| sa[x]).collect();
             if let Some(group) =
-                build_group(&positions, min_len, files, &owner, &offset, min_tokens, min_lines)
+                build_group(&positions, min_len, files, &owner, &offset, min_tokens, min_lines, base)
             {
                 groups.push(group);
             }
@@ -165,6 +242,7 @@ fn build_group(
     offset: &[usize],
     min_tokens: usize,
     min_lines: u32,
+    base: Option<&BaseCorpus>,
 ) -> Option<CloneGroup> {
     let mut spans: Vec<(usize, usize)> = positions
         .iter()
@@ -175,13 +253,12 @@ fn build_group(
 
     // weighted gate: a block that's mostly decorators/imports-residue shouldn't count.
     // tokens are identical across instances, so any one span is representative.
-    if let Some(&(fid, off)) = spans.first() {
-        let f = &files[fid];
-        let end = (off + length).min(f.weights.len());
-        let weighted: f32 = f.weights[off..end].iter().sum();
-        if weighted < min_tokens as f32 {
-            return None;
-        }
+    let &(first_fid, first_off) = spans.first()?;
+    let first = &files[first_fid];
+    let first_end = (first_off + length).min(first.weights.len());
+    let weighted: f32 = first.weights[first_off..first_end].iter().sum();
+    if weighted < min_tokens as f32 {
+        return None;
     }
 
     let mut instances: Vec<CloneInstance> = Vec::new();
@@ -207,7 +284,12 @@ fn build_group(
     if line_count < min_lines {
         return None;
     }
-    Some(CloneGroup { instances, token_count: length, line_count })
+    // compare without the edges: a move or a nearby edit can glue a `}` or two onto old copies,
+    // and that alone shouldn't make them new
+    let pattern = &first.keys[first_off..first_end];
+    let trim = pattern.len() / 10;
+    let existed_at_base = base.is_some_and(|b| b.count(&pattern[trim..pattern.len() - trim]) >= instances.len());
+    Some(CloneGroup { instances, token_count: length, line_count, existed_at_base })
 }
 
 fn remove_line_subsets(groups: &mut Vec<CloneGroup>) {
@@ -356,10 +438,75 @@ class %NAME% {
             FileTokens { path: "A.java".into(), keys: a.keys, lines: a.lines, weights: a.weights },
             FileTokens { path: "B.java".into(), keys: b.keys, lines: b.lines, weights: b.weights },
         ];
-        let groups = detect(&files, 20, 3);
+        let groups = detect(&files, 20, 3, None);
         assert!(!groups.is_empty(), "expected a clone group");
         let g = &groups[0];
         assert!(g.instances.len() >= 2, "expected >=2 instances");
         let _ = PathBuf::new();
+    }
+
+    const BLOCK: &str = r#"
+  int %NAME%(int a, int b) {
+    int total = 0;
+    for (int i = 0; i < a; i++) {
+      if (i % 2 == 0) { total += i * b; } else { total -= i; }
+    }
+    while (total > 100) { total = total - b; }
+    return total;
+  }
+"#;
+
+    fn file(path: &str, methods: &[&str]) -> FileTokens {
+        let body: String = methods.iter().map(|m| BLOCK.replace("%NAME%", m)).collect();
+        let class = path.trim_end_matches(".java");
+        let mut t = toks(&format!("class {class} {{\n{body}}}\n"));
+        t.path = path.into();
+        t
+    }
+
+    fn groups_vs_base(head: &[FileTokens], base: &[FileTokens]) -> Vec<CloneGroup> {
+        let corpus = BaseCorpus::new(base.iter().map(|f| f.keys.as_slice()));
+        detect(head, 20, 3, Some(&corpus))
+    }
+
+    #[test]
+    fn old_copies_existed_at_base() {
+        let base = vec![file("A.java", &["run", "run"])];
+        let head = vec![file("A.java", &["run", "run"])];
+        let groups = groups_vs_base(&head, &base);
+        assert!(!groups.is_empty());
+        assert!(groups.iter().all(|g| g.existed_at_base));
+    }
+
+    #[test]
+    fn extra_copy_is_introduced() {
+        let base = vec![file("A.java", &["run", "run"])];
+        let head = vec![file("A.java", &["run", "run"]), file("B.java", &["run"])];
+        let groups = groups_vs_base(&head, &base);
+        assert!(groups.iter().any(|g| g.instances.len() == 3 && !g.existed_at_base));
+    }
+
+    #[test]
+    fn brand_new_duplicate_is_introduced() {
+        let base = vec![file("A.java", &["run"])];
+        let head = vec![file("A.java", &["run"]), file("B.java", &["run"])];
+        assert!(groups_vs_base(&head, &base).iter().all(|g| !g.existed_at_base));
+    }
+
+    #[test]
+    fn copy_moved_to_another_file_still_existed() {
+        let base = vec![file("A.java", &["run", "run"])];
+        let head = vec![file("A.java", &["run"]), file("Moved.java", &["run"])];
+        assert!(groups_vs_base(&head, &base).iter().all(|g| g.existed_at_base));
+    }
+
+    #[test]
+    fn corpus_counts_non_overlapping_occurrences() {
+        let keys = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        let files = [keys("a b a b a"), keys("x a b a")];
+        let corpus = BaseCorpus::new(files.iter().map(|k| k.as_slice()));
+        assert_eq!(corpus.count(&keys("a b a")), 2);
+        assert_eq!(corpus.count(&keys("b a")), 3);
+        assert_eq!(corpus.count(&keys("a z")), 0);
     }
 }

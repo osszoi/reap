@@ -82,6 +82,8 @@ pub struct CloneGroup {
     pub instances: Vec<CloneInstance>,
     pub token_count: usize,
     pub line_count: u32,
+    // PR mode: this code already appeared at least this many times at the merge-base
+    pub existed_at_base: bool,
 }
 
 #[derive(Debug, Clone)]

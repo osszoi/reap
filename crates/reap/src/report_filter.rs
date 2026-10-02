@@ -8,6 +8,8 @@ pub struct ChangedSet {
     added_files: HashSet<String>,
     pom_changed: bool,
     merge_base: String,
+    // modified or deleted vs the merge-base, deletion-only edits included (they have no hunk ranges)
+    base_paths: Vec<String>,
 }
 
 pub struct ReportFilter {
@@ -30,6 +32,10 @@ impl ReportFilter {
 
     pub fn changed_paths(&self) -> Vec<&str> {
         self.changed.as_ref().map(|c| c.ranges.keys().map(|k| k.as_str()).collect()).unwrap_or_default()
+    }
+
+    pub fn base_paths(&self) -> Vec<&str> {
+        self.changed.as_ref().map(|c| c.base_paths.iter().map(|p| p.as_str()).collect()).unwrap_or_default()
     }
 
     pub fn is_added(&self, path: &str) -> bool {
@@ -221,8 +227,11 @@ pub fn build_changed(repo_root: &Path, reference: &str) -> Result<ChangedSet, Ch
     }
 
     let pom_changed = ranges.keys().chain(added.iter()).any(|p| p.ends_with("pom.xml"));
+    let base_paths = git_stdout(repo_root, &["diff", "--name-status", "--no-renames", "-z", &merge_base])
+        .map(|out| parse_name_status(&out))
+        .unwrap_or_default();
 
-    Ok(ChangedSet { ranges, added_files: added, pom_changed, merge_base })
+    Ok(ChangedSet { ranges, added_files: added, pom_changed, merge_base, base_paths })
 }
 
 fn git_ok(dir: &Path, args: &[&str]) -> bool {
@@ -275,6 +284,16 @@ fn parse_diff(
     }
 }
 
+// -z output: status\0path\0status\0path...
+fn parse_name_status(out: &str) -> Vec<String> {
+    let fields: Vec<&str> = out.split('\0').collect();
+    fields
+        .chunks(2)
+        .filter(|pair| pair.len() == 2 && matches!(pair[0].chars().next(), Some('M' | 'D' | 'T')))
+        .map(|pair| pair[1].to_string())
+        .collect()
+}
+
 fn parse_hunk(line: &str) -> Option<(u32, u32)> {
     let plus = line.split('+').nth(1)?;
     let token = plus.split_whitespace().next()?;
@@ -323,6 +342,12 @@ mod tests {
         assert!(validate_ref("").is_err());
         assert!(validate_ref("-x").is_err());
         assert!(validate_ref("a;rm -rf").is_err());
+    }
+
+    #[test]
+    fn keeps_modified_and_deleted_from_name_status() {
+        let out = "M\0src/A.java\0A\0src/New.java\0D\0src/Gone.java\0T\0src/Link.java\0";
+        assert_eq!(parse_name_status(out), vec!["src/A.java", "src/Gone.java", "src/Link.java"]);
     }
 
     #[test]

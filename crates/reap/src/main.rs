@@ -254,7 +254,7 @@ fn run_java(config: &Config, root: &Path, repo_root: &Path, filter: &ReportFilte
         None
     };
 
-    let baseline = graph.as_ref().and_then(|g| Baseline::load(repo_root, filter, g));
+    let baseline = Baseline::load(repo_root, filter, graph.as_ref());
     let want_complexity = matches!(sub, Subcommand::All | Subcommand::Complexity);
     let want_circular = matches!(sub, Subcommand::All | Subcommand::Circular);
     let want_unused_files = matches!(sub, Subcommand::All | Subcommand::UnusedFiles);
@@ -307,7 +307,7 @@ fn run_java(config: &Config, root: &Path, repo_root: &Path, filter: &ReportFilte
     }
 
     let dupes = if matches!(sub, Subcommand::All | Subcommand::Duplicates) {
-        Some(analyze::duplicates::analyze(root, repo_root, config.min_tokens, config.min_lines))
+        Some(analyze::duplicates::analyze(root, repo_root, config.min_tokens, config.min_lines, baseline.as_ref()))
     } else {
         None
     };
@@ -372,7 +372,7 @@ fn run_java(config: &Config, root: &Path, repo_root: &Path, filter: &ReportFilte
                         .iter()
                         .map(|i| (i.file.clone(), i.start_line, i.end_line))
                         .collect();
-                    filter.group_shown(&members)
+                    filter.group_shown(&members) && !g.existed_at_base
                 })
                 .collect();
             let families: Vec<CloneFamily> =
