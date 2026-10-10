@@ -1,4 +1,4 @@
-use crate::java::extract::{functions_in, FunctionMetrics};
+use crate::java::extract::{functions_in, param_count, FunctionMetrics};
 use crate::java::parse::parse;
 use crate::java::suppress::{self, CycleIgnore};
 use std::collections::HashSet;
@@ -42,6 +42,68 @@ const TYPE_DECL_KINDS: &[&str] = &[
     "enum_declaration",
     "record_declaration",
     "annotation_type_declaration",
+];
+
+// methods the framework calls by reflection/routing, so nobody references them by name
+const ENTRY_POINT_ANNOTATIONS: &[&str] = &[
+    "RequestMapping",
+    "GetMapping",
+    "PostMapping",
+    "PutMapping",
+    "PatchMapping",
+    "DeleteMapping",
+    "ExceptionHandler",
+    "ModelAttribute",
+    "InitBinder",
+    "MessageMapping",
+    "SubscribeMapping",
+    "QueryMapping",
+    "MutationMapping",
+    "SubscriptionMapping",
+    "SchemaMapping",
+    "BatchMapping",
+    "Bean",
+    "Scheduled",
+    "EventListener",
+    "TransactionalEventListener",
+    "KafkaListener",
+    "KafkaHandler",
+    "RabbitListener",
+    "RabbitHandler",
+    "JmsListener",
+    "SqsListener",
+    "StreamListener",
+    "Recover",
+    "PostConstruct",
+    "PreDestroy",
+    "PrePersist",
+    "PostPersist",
+    "PreUpdate",
+    "PostUpdate",
+    "PreRemove",
+    "PostRemove",
+    "PostLoad",
+    "Around",
+    "Before",
+    "After",
+    "AfterReturning",
+    "AfterThrowing",
+    "Pointcut",
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "HEAD",
+    "OPTIONS",
+    "Path",
+    "JsonCreator",
+    "JsonValue",
+    "JsonProperty",
+    "JsonGetter",
+    "JsonSetter",
+    "JsonAnyGetter",
+    "JsonAnySetter",
 ];
 
 pub fn parse_file(path: PathBuf, source: &str) -> Option<FileInfo> {
@@ -231,10 +293,30 @@ fn collect_public_methods(node: Node, src: &[u8], out: &mut Vec<MemberDecl>) {
 
 fn is_exported_method(node: Node, src: &[u8]) -> bool {
     let visible = has_modifier(node, src, "public") || has_modifier(node, src, "protected");
-    visible && !has_annotation(node, src, "Override")
+    visible
+        && !has_annotation(node, src, |a| a == "Override" || ENTRY_POINT_ANNOTATIONS.contains(&a))
+        && !is_bean_accessor(node, src)
 }
 
-fn has_annotation(node: Node, src: &[u8], name: &str) -> bool {
+// getX()/isX()/setX(v): jackson, JPA & co call these by reflection
+fn is_bean_accessor(node: Node, src: &[u8]) -> bool {
+    let Some(name) = node.child_by_field_name("name").and_then(|n| n.utf8_text(src).ok()) else {
+        return false;
+    };
+    match param_count(node) {
+        0 => has_accessor_prefix(name, "get") || has_accessor_prefix(name, "is"),
+        1 => has_accessor_prefix(name, "set"),
+        _ => false,
+    }
+}
+
+fn has_accessor_prefix(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|c| c.is_ascii_uppercase())
+}
+
+fn has_annotation(node: Node, src: &[u8], is_match: impl Fn(&str) -> bool) -> bool {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "modifiers" {
@@ -243,7 +325,7 @@ fn has_annotation(node: Node, src: &[u8], name: &str) -> bool {
                 if matches!(m.kind(), "marker_annotation" | "annotation") {
                     if let Some(n) = m.child_by_field_name("name").and_then(|x| x.utf8_text(src).ok())
                     {
-                        if n.rsplit('.').next().unwrap_or(n) == name {
+                        if is_match(n.rsplit('.').next().unwrap_or(n)) {
                             return true;
                         }
                     }

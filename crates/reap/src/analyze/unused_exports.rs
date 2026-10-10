@@ -37,3 +37,31 @@ pub fn collect(files: &[FileInfo], cwd: &Path) -> Vec<UnusedExport> {
 fn is_test_path(path: &str) -> bool {
     path.contains("/src/test/") || path.contains("/test/")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::java::model::parse_file;
+    use std::path::PathBuf;
+
+    fn unused_names(src: &str) -> Vec<String> {
+        let file = parse_file(PathBuf::from("/r/p/A.java"), src).unwrap();
+        collect(&[file], Path::new("/r")).into_iter().map(|u| u.name).collect()
+    }
+
+    #[test]
+    fn framework_entry_points_are_not_exports() {
+        let names = unused_names(
+            "package p;\n@RestController\nclass A {\n  @GetMapping(\"/a\")\n  public String list() { return \"\"; }\n  @org.springframework.web.bind.annotation.PostMapping\n  public void create() {}\n  @ExceptionHandler(Exception.class)\n  public void onError(Exception e) {}\n  @Bean\n  public Object restTemplate() { return null; }\n  @Around(\"x()\")\n  public Object advice(Object jp) { return null; }\n  public void leftoverHelper() {}\n}\n",
+        );
+        assert_eq!(names, vec!["leftoverHelper"]);
+    }
+
+    #[test]
+    fn bean_accessors_are_not_exports() {
+        let names = unused_names(
+            "package p;\nclass A {\n  public String getName() { return \"\"; }\n  public boolean isActive() { return true; }\n  public void setName(String n) {}\n  public String getName(int i) { return \"\"; }\n  public void setup() {}\n  public boolean isolate() { return true; }\n  public void set(String a) {}\n}\n",
+        );
+        assert_eq!(names, vec!["getName", "setup", "isolate", "set"]);
+    }
+}

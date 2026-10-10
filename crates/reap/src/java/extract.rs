@@ -69,7 +69,7 @@ fn function_name(func: Node, src: &[u8]) -> String {
         .to_string()
 }
 
-fn param_count(func: Node) -> u8 {
+pub fn param_count(func: Node) -> u8 {
     let params = func.child_by_field_name("parameters");
     let Some(params) = params else { return 0 };
     let n = match params.kind() {

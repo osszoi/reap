@@ -96,7 +96,8 @@ pub static TOPICS: &[Topic] = &[
         name: "Unused Files",
         legend: "files unreachable from any entry point (main / tests / Spring beans / SPI services).",
         full: "Files that cannot be reached from any entry point by following imports. Entry points \
-               include main methods, test classes, Spring-managed beans, and SPI service providers. \
+               include main methods, test classes, Spring-managed beans (including @ControllerAdvice \
+               and @Aspect classes), and SPI service providers. \
                If nothing reachable references a file, it's likely dead code that can be deleted.",
         how_to_fix: "Confirm the file truly isn't loaded reflectively or by a framework, then delete \
                      it. If it IS an entry point reap doesn't recognize (e.g. a custom framework \
@@ -106,12 +107,15 @@ pub static TOPICS: &[Topic] = &[
         id: "unused-exports",
         aliases: &["dead-exports", "exports", "unused-export"],
         name: "Unused Exports",
-        legend: "public/protected methods with no caller in any other file (heuristic: name-based; skips @Override, main, tests).",
+        legend: "public/protected methods with no caller in any other file (heuristic: name-based; skips @Override, main, tests, framework entry points, getters/setters).",
         full: "Public or protected methods that no other file appears to call. This is a name-based \
                heuristic: it scans every file for the method name being referenced. It deliberately \
-               skips @Override methods, main, and test methods. Because it's name-based, a method \
-               called only via reflection or by an external consumer of your library will show up \
-               here as a false positive.",
+               skips @Override methods, main, and test methods, methods the framework calls itself \
+               (@GetMapping and friends, @ExceptionHandler, @Bean, @Scheduled, listeners, JPA \
+               lifecycle, AspectJ advice, JAX-RS, Jackson) and bean-style getX()/isX()/setX(v) \
+               accessors. Because it's name-based, any other method called only via reflection \
+               (e.g. a custom annotation wrapping @GetMapping) or by an external consumer of your \
+               library will show up here as a false positive.",
         how_to_fix: "If the method is genuinely internal and unused, delete it or reduce its \
                      visibility to private/package-private. If it's part of a public library API \
                      consumed externally, it's expected to appear here — reap analyzes only this \
